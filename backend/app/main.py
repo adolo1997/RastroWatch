@@ -72,7 +72,9 @@ def health():
 
 @app.post("/api/login")
 def login(payload: LoginIn, response: Response):
-    if not (secrets.compare_digest(payload.username, settings.admin_user) and secrets.compare_digest(payload.password, settings.admin_password)):
+    username = payload.username.strip()
+    password = payload.password.strip()
+    if not (secrets.compare_digest(username, settings.admin_user) and secrets.compare_digest(password, settings.admin_password)):
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
     token = serializer.dumps({"user": settings.admin_user})
     response.set_cookie("rastrowatch_session", token, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30)

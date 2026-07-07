@@ -207,6 +207,30 @@ docker compose logs -f frontend
 ```
 
 
+
+### Solución de problemas: login
+
+Si el login muestra “Credenciales incorrectas” después de editar `.env`:
+
+1. Verifica que `ADMIN_USER` y `ADMIN_PASSWORD` estén definidos sin comillas ni espacios extra.
+2. Reconstruye y recrea el backend para que Docker Compose recargue las variables:
+
+```bash
+docker compose up -d --build --force-recreate backend frontend
+```
+
+3. Comprueba las variables que ve el contenedor:
+
+```bash
+docker compose exec backend printenv ADMIN_USER
+docker compose exec backend sh -lc 'python - <<"PY"
+import os
+print("ADMIN_PASSWORD length:", len(os.getenv("ADMIN_PASSWORD", "")))
+PY'
+```
+
+Por seguridad, no pegues tu `OPENAI_API_KEY` en capturas ni tickets. Si una clave se ha compartido por error, revócala y genera una nueva.
+
 ## Modo “solo OpenAI”
 
 RastroWatch puede funcionar aunque únicamente esté configurada `OPENAI_API_KEY`. En ese caso:
