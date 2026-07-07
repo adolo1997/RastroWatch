@@ -180,3 +180,150 @@ def quick_seen(db: Annotated[Session, Depends(get_db)], brand: str = Form(""), m
 @app.post("/api/ai/analyze", response_model=AiStubOut)
 def ai_analyze(user=Depends(require_auth)):
     return AiStubOut(message="IA pendiente de configurar")
+
+# --- Automatic watch investigator / estimator endpoints ---
+from .models import WatchInvestigation
+from .schemas import AIWatchAnalysis, PriceSearchIn, PriceSearchOut, WatchInvestigationOut, WatchInvestigationPatch
+from .services.ai.watch_identifier import WatchIdentifier
+from .services.storage.image_storage import save_upload, upload_path
+from .services.valuation.price_aggregator import PriceAggregator, source_status
+from .services.valuation.valuation_engine import ValuationEngine
+
+
+def investigation_out(investigation: WatchInvestigation) -> WatchInvestigationOut:
+    data = WatchInvestigationOut.model_validate(investigation)
+    data.uploaded_image_url = f"/uploads/{investigation.uploaded_image_path}"
+    return data
+
+
+def analysis_queries(analysis) -> list[str]:
+    queries = list(analysis.search_queries or [])
+    main_query = " ".join(filter(None, [analysis.brand, analysis.model, analysis.reference]))
+    if main_query and main_query not in queries:
+        queries.insert(0, main_query)
+    return queries
+
+
+@app.get("/api/sources/status")
+def get_sources_status(user=Depends(require_auth)):
+    status = source_status()
+    status["openai"] = bool(settings.openai_api_key)
+    return status
+
+
+@app.post("/api/watch/identify", response_model=AIWatchAnalysis)
+async def identify_watch(image: UploadFile = File(...), user=Depends(require_auth)):
+    filename = await save_upload(image, prefix="identify")
+    analysis = await WatchIdentifier().identify(upload_path(filename))
+    return analysis
+
+
+@app.post("/api/price-search", response_model=PriceSearchOut)
+async def price_search(payload: PriceSearchIn, user=Depends(require_auth)):
+    results = await PriceAggregator().search([payload.query], payload.source_filters)
+    valuation = ValuationEngine().calculate(results, price_seen=payload.price_seen)
+    return PriceSearchOut(results=results, valuation=valuation)
+
+
+@app.post("/api/watch/analyze-full", response_model=WatchInvestigationOut)
+async def analyze_full(db: Annotated[Session, Depends(get_db)], image: UploadFile = File(...), price_seen: float | None = Form(None), location_seen: str = Form("otro"), notes: str = Form(""), user=Depends(require_auth)):
+    filename = await save_upload(image, prefix="analysis")
+    analysis = await WatchIdentifier().identify(upload_path(filename))
+    queries = analysis_queries(analysis)
+    if not queries:
+        queries = ["reloj segunda mano"]
+    results = await PriceAggregator().search(queries[:4])
+    valuation = ValuationEngine().calculate(results, analysis=analysis, price_seen=price_seen)
+    investigation = WatchInvestigation(
+        uploaded_image_path=filename,
+        user_price_seen=price_seen,
+        user_location_seen=location_seen,
+        user_notes=notes,
+        ai_analysis=analysis.model_dump(),
+        valuation_result=valuation.model_dump(),
+        selected_brand=analysis.brand,
+        selected_model=analysis.model,
+        selected_reference=analysis.reference,
+        final_status="pendiente",
+        manual_corrections={},
+    )
+    db.add(investigation)
+    db.commit()
+    db.refresh(investigation)
+    return investigation_out(investigation)
+
+
+@app.get("/api/watch/investigations", response_model=list[WatchInvestigationOut])
+def list_investigations(db: Annotated[Session, Depends(get_db)], status: str = "", user=Depends(require_auth)):
+    query = db.query(WatchInvestigation).order_by(WatchInvestigation.created_at.desc())
+    if status:
+        query = query.filter(WatchInvestigation.final_status == status)
+    return [investigation_out(item) for item in query.all()]
+
+
+@app.get("/api/watch/investigations/{investigation_id}", response_model=WatchInvestigationOut)
+def get_investigation(investigation_id: int, db: Annotated[Session, Depends(get_db)], user=Depends(require_auth)):
+    investigation = db.get(WatchInvestigation, investigation_id)
+    if not investigation:
+        raise HTTPException(status_code=404, detail="Investigación no encontrada")
+    return investigation_out(investigation)
+
+
+@app.patch("/api/watch/investigations/{investigation_id}", response_model=WatchInvestigationOut)
+def patch_investigation(investigation_id: int, payload: WatchInvestigationPatch, db: Annotated[Session, Depends(get_db)], user=Depends(require_auth)):
+    investigation = db.get(WatchInvestigation, investigation_id)
+    if not investigation:
+        raise HTTPException(status_code=404, detail="Investigación no encontrada")
+    updates = payload.model_dump(exclude_unset=True)
+    for key, value in updates.items():
+        setattr(investigation, key, value)
+    db.commit()
+    db.refresh(investigation)
+    return investigation_out(investigation)
+
+
+@app.post("/api/watch/investigations/{investigation_id}/validate", response_model=WatchInvestigationOut)
+def validate_investigation(investigation_id: int, db: Annotated[Session, Depends(get_db)], user=Depends(require_auth)):
+    investigation = db.get(WatchInvestigation, investigation_id)
+    if not investigation:
+        raise HTTPException(status_code=404, detail="Investigación no encontrada")
+    investigation.final_status = "validado"
+    db.commit()
+    db.refresh(investigation)
+    return investigation_out(investigation)
+
+
+@app.post("/api/watch/investigations/{investigation_id}/save-as-watch", response_model=WatchOut)
+def save_investigation_as_watch(investigation_id: int, db: Annotated[Session, Depends(get_db)], user=Depends(require_auth)):
+    investigation = db.get(WatchInvestigation, investigation_id)
+    if not investigation:
+        raise HTTPException(status_code=404, detail="Investigación no encontrada")
+    analysis = investigation.ai_analysis or {}
+    valuation = investigation.valuation_result or {}
+    watch = Watch(
+        brand=investigation.selected_brand or analysis.get("brand") or "",
+        model=investigation.selected_model or analysis.get("model") or "",
+        reference=investigation.selected_reference or analysis.get("reference") or "",
+        movement_type=analysis.get("movement") or "desconocido",
+        condition=analysis.get("detected_condition") or "desconocido",
+        recommended_buy_price=valuation.get("recommended_buy_price"),
+        seen_price=investigation.user_price_seen,
+        resale_margin=valuation.get("resale_margin"),
+        counterfeit_risk=analysis.get("authenticity_risk") or "medio",
+        price_reliability="alta" if valuation.get("confidence", 0) >= 0.7 else "media" if valuation.get("confidence", 0) >= 0.4 else "baja",
+        identification_notes=analysis.get("notes") or "",
+        prebuy_checklist="\n".join(valuation.get("warnings", [])),
+        price_sources=", ".join(valuation.get("sources_used", [])),
+        location=investigation.user_location_seen or "otro",
+        quick_notes=investigation.user_notes or "",
+        status="investigado",
+    )
+    apply_valuation(watch)
+    db.add(watch)
+    db.commit()
+    db.refresh(watch)
+    db.add(WatchImage(watch_id=watch.id, filename=investigation.uploaded_image_path, original_name="imagen de investigación"))
+    investigation.final_status = "validado"
+    db.commit()
+    db.refresh(watch)
+    return watch_out(watch)

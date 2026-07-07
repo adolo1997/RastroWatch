@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -47,3 +47,21 @@ class WatchImage(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     watch = relationship("Watch", back_populates="images")
+
+
+class WatchInvestigation(Base):
+    __tablename__ = "watch_investigations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    uploaded_image_path = Column(String(255), nullable=False)
+    user_price_seen = Column(Float, nullable=True)
+    user_location_seen = Column(String(60), default="otro")
+    user_notes = Column(Text, default="")
+    ai_analysis = Column(JSON, nullable=True)
+    valuation_result = Column(JSON, nullable=True)
+    selected_brand = Column(String(120), nullable=True)
+    selected_model = Column(String(160), nullable=True)
+    selected_reference = Column(String(120), nullable=True)
+    final_status = Column(String(40), default="pendiente")
+    manual_corrections = Column(JSON, default=dict)
