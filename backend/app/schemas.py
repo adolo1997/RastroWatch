@@ -75,6 +75,15 @@ class AIWatchAnalysis(BaseModel):
     detected_condition: str = "desconocido"
     visible_damage: list[str] = Field(default_factory=list)
     authenticity_risk: str = "desconocido"
+    market_value_initial_estimate: float | None = None
+    current_real_value_estimate_low: float | None = None
+    current_real_value_estimate_median: float | None = None
+    current_real_value_estimate_high: float | None = None
+    recommended_buy_price: float | None = None
+    probable_sale_value: float | None = None
+    resale_margin: float | None = None
+    recommendation: str | None = None
+    warnings: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     search_queries: list[str] = Field(default_factory=list)
     notes: str = ""

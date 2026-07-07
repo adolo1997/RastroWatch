@@ -190,6 +190,60 @@ from .services.valuation.price_aggregator import PriceAggregator, source_status
 from .services.valuation.valuation_engine import ValuationEngine
 
 
+
+def external_price_sources_configured() -> bool:
+    status = source_status()
+    return any(status.get(key) for key in ("ebay", "thewatchapi", "watchcharts", "wallapop_apify", "milanuncios_apify", "catawiki_apify"))
+
+
+def ai_only_valuation(analysis: AIWatchAnalysis, price_seen: float | None = None) -> ValuationResult:
+    warnings = list(analysis.warnings or [])
+    warnings.insert(0, "Estimación IA pendiente de validar con fuentes externas.")
+    if not any([analysis.market_value_initial_estimate, analysis.current_real_value_estimate_median, analysis.recommended_buy_price, analysis.probable_sale_value]):
+        warnings.append("Datos insuficientes: OpenAI no devolvió una estimación numérica fiable.")
+
+    median_value = analysis.current_real_value_estimate_median
+    recommended = analysis.recommended_buy_price
+    high = analysis.current_real_value_estimate_high or median_value
+    recommendation = analysis.recommendation or "investigar más"
+    opportunity = "datos insuficientes"
+    if price_seen is not None and recommended is not None and median_value is not None:
+        if price_seen <= recommended * 0.75:
+            opportunity = "muy buena"
+            warnings.append("Precio muy por debajo de la estimación IA: revisar autenticidad y estado antes de comprar.")
+        elif price_seen <= recommended:
+            opportunity = "buena"
+        elif price_seen <= median_value:
+            opportunity = "negociable"
+        elif high is not None and price_seen > high:
+            opportunity = "mala"
+            recommendation = "evitar"
+        else:
+            opportunity = "caro"
+            recommendation = "negociar"
+    elif median_value is not None:
+        opportunity = "estimación IA"
+
+    if analysis.authenticity_risk == "alto":
+        warnings.append("Riesgo alto de falsificación: validar manualmente antes de comprar.")
+        recommendation = "investigar más / evitar"
+
+    return ValuationResult(
+        market_value_initial=analysis.market_value_initial_estimate,
+        current_real_value_low=analysis.current_real_value_estimate_low,
+        current_real_value_median=median_value,
+        current_real_value_high=analysis.current_real_value_estimate_high,
+        recommended_buy_price=recommended,
+        probable_sale_value=analysis.probable_sale_value,
+        resale_margin=analysis.resale_margin if analysis.resale_margin is not None else ((analysis.probable_sale_value - price_seen) if price_seen is not None and analysis.probable_sale_value is not None else None),
+        opportunity=opportunity,
+        recommendation=recommendation,
+        warnings=warnings,
+        sources_used=["OpenAI Vision (estimación sin validar)"],
+        confidence=analysis.confidence,
+        results=[],
+    )
+
 def investigation_out(investigation: WatchInvestigation) -> WatchInvestigationOut:
     data = WatchInvestigationOut.model_validate(investigation)
     data.uploaded_image_url = f"/uploads/{investigation.uploaded_image_path}"
@@ -232,8 +286,11 @@ async def analyze_full(db: Annotated[Session, Depends(get_db)], image: UploadFil
     queries = analysis_queries(analysis)
     if not queries:
         queries = ["reloj segunda mano"]
-    results = await PriceAggregator().search(queries[:4])
-    valuation = ValuationEngine().calculate(results, analysis=analysis, price_seen=price_seen)
+    if external_price_sources_configured():
+        results = await PriceAggregator().search(queries[:4])
+        valuation = ValuationEngine().calculate(results, analysis=analysis, price_seen=price_seen)
+    else:
+        valuation = ai_only_valuation(analysis, price_seen=price_seen)
     investigation = WatchInvestigation(
         uploaded_image_path=filename,
         user_price_seen=price_seen,
@@ -306,6 +363,9 @@ def save_investigation_as_watch(investigation_id: int, db: Annotated[Session, De
         reference=investigation.selected_reference or analysis.get("reference") or "",
         movement_type=analysis.get("movement") or "desconocido",
         condition=analysis.get("detected_condition") or "desconocido",
+        estimated_min_price=valuation.get("current_real_value_low"),
+        estimated_avg_price=valuation.get("current_real_value_median"),
+        estimated_max_price=valuation.get("current_real_value_high"),
         recommended_buy_price=valuation.get("recommended_buy_price"),
         seen_price=investigation.user_price_seen,
         resale_margin=valuation.get("resale_margin"),

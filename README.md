@@ -206,6 +206,27 @@ docker compose logs -f backend
 docker compose logs -f frontend
 ```
 
+
+## Modo “solo OpenAI”
+
+RastroWatch puede funcionar aunque únicamente esté configurada `OPENAI_API_KEY`. En ese caso:
+
+- El endpoint `POST /api/watch/analyze-full` guarda la imagen, la envía a OpenAI Vision y persiste una investigación en PostgreSQL.
+- La respuesta incluye marca, modelo, referencia, estado visual, daños visibles, riesgo de falsificación, confianza y queries sugeridas.
+- Si OpenAI devuelve estimaciones numéricas, se guardan como valoración inicial: valor de mercado, rango real actual, compra recomendada, venta probable y margen estimado.
+- La valoración aparece marcada como **“Estimación IA pendiente de validar con fuentes externas”**.
+- eBay, WatchCharts, TheWatchAPI y Apify no se usan si sus claves no están configuradas.
+- El resultado se puede editar, validar manualmente y convertir después en reloj definitivo.
+
+Configuración mínima:
+
+```env
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=
+```
+
+Si `OPENAI_MODEL` está vacío, el backend usa el modelo de visión por defecto definido en `backend/app/config.py`.
+
 ## Limitaciones del tasador
 
 - La valoración es aproximada y depende de las fuentes externas configuradas.
