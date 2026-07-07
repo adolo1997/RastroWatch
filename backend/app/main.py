@@ -183,7 +183,7 @@ def ai_analyze(user=Depends(require_auth)):
 
 # --- Automatic watch investigator / estimator endpoints ---
 from .models import WatchInvestigation
-from .schemas import AIWatchAnalysis, PriceSearchIn, PriceSearchOut, WatchInvestigationOut, WatchInvestigationPatch
+from .schemas import AIWatchAnalysis, PriceSearchIn, PriceSearchOut, ValuationResult, WatchInvestigationOut, WatchInvestigationPatch
 from .services.ai.watch_identifier import WatchIdentifier
 from .services.storage.image_storage import save_upload, upload_path
 from .services.valuation.price_aggregator import PriceAggregator, source_status
